@@ -48,6 +48,7 @@ gem "rqrcode"
 gem "rotp"
 gem "unpwn"
 gem "webauthn"
+gem "timescaledb-rails"
 
 # Admin dashboard
 gem "avo"
