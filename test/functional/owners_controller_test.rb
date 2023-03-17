@@ -49,7 +49,9 @@ class OwnersControllerTest < ActionController::TestCase
       context "when user owns the gem" do
         context "with invalid handle" do
           setup do
-            post :create, params: { handle: "no_user", rubygem_id: @rubygem.name }
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              post :create, params: { handle: "no_user", rubygem_id: @rubygem.name }
+            end
           end
 
           should respond_with :unprocessable_entity
@@ -61,9 +63,6 @@ class OwnersControllerTest < ActionController::TestCase
           end
 
           should "not send confirmation email" do
-            ActionMailer::Base.deliveries.clear
-            Delayed::Worker.new.work_off
-
             assert_emails 0
           end
         end
@@ -86,8 +85,8 @@ class OwnersControllerTest < ActionController::TestCase
             assert_equal expected_notice, flash[:notice]
           end
           should "send confirmation email" do
-            ActionMailer::Base.deliveries.clear
-            Delayed::Worker.new.work_off
+            assert_enqueued_emails 1
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
             assert_emails 1
             assert_equal "Please confirm the ownership of #{@rubygem.name} gem on RubyGems.org", last_email.subject
@@ -98,10 +97,9 @@ class OwnersControllerTest < ActionController::TestCase
             setup { @rubygem.owners_including_unconfirmed.last.destroy }
 
             should "not send confirmation email" do
-              ActionMailer::Base.deliveries.clear
-              Delayed::Worker.new.work_off
-
-              assert_equal 0, Delayed::Job.where.not(last_error: nil).count
+              assert_raises(ActiveJob::DeserializationError) do
+                perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
+              end
               assert_emails 0
             end
           end
@@ -175,7 +173,9 @@ class OwnersControllerTest < ActionController::TestCase
           setup do
             @second_user = create(:user)
             @ownership = create(:ownership, rubygem: @rubygem, user: @second_user)
-            delete :destroy, params: { rubygem_id: @rubygem.name, handle: @second_user.display_id }
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              delete :destroy, params: { rubygem_id: @rubygem.name, handle: @second_user.display_id }
+            end
           end
           should redirect_to("ownership index") { rubygem_owners_path(@rubygem) }
 
@@ -183,9 +183,6 @@ class OwnersControllerTest < ActionController::TestCase
             refute_includes @rubygem.owners_including_unconfirmed, @second_user
           end
           should "send email notifications about owner removal" do
-            ActionMailer::Base.deliveries.clear
-            Delayed::Worker.new.work_off
-
             assert_emails 1
             assert_contains last_email.subject, "You were removed as an owner from #{@rubygem.name} gem"
             assert_equal [@second_user.email], last_email.to
@@ -196,7 +193,9 @@ class OwnersControllerTest < ActionController::TestCase
           setup do
             @second_user = create(:user)
             @ownership = create(:ownership, :unconfirmed, rubygem: @rubygem, user: @second_user)
-            delete :destroy, params: { rubygem_id: @rubygem.name, handle: @second_user.display_id }
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              delete :destroy, params: { rubygem_id: @rubygem.name, handle: @second_user.display_id }
+            end
           end
           should redirect_to("ownership index") { rubygem_owners_path(@rubygem) }
 
@@ -204,9 +203,6 @@ class OwnersControllerTest < ActionController::TestCase
             refute_includes @rubygem.owners_including_unconfirmed, @second_user
           end
           should "send email notifications about owner removal" do
-            ActionMailer::Base.deliveries.clear
-            Delayed::Worker.new.work_off
-
             assert_emails 1
             assert_contains last_email.subject, "You were removed as an owner from #{@rubygem.name} gem"
             assert_equal [@second_user.email], last_email.to
@@ -216,7 +212,9 @@ class OwnersControllerTest < ActionController::TestCase
         context "with handle of last owner" do
           setup do
             @last_owner = @rubygem.owners.last
-            delete :destroy, params: { rubygem_id: @rubygem.name, handle: @last_owner.display_id }
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              delete :destroy, params: { rubygem_id: @rubygem.name, handle: @last_owner.display_id }
+            end
           end
           should respond_with :forbidden
 
@@ -227,9 +225,6 @@ class OwnersControllerTest < ActionController::TestCase
             assert_equal "Can't remove the only owner of the gem", flash[:alert]
           end
           should "not send email notifications about owner removal" do
-            ActionMailer::Base.deliveries.clear
-            Delayed::Worker.new.work_off
-
             assert_emails 0
           end
         end
@@ -300,7 +295,9 @@ class OwnersControllerTest < ActionController::TestCase
       context "when unconfirmed ownership exists" do
         setup do
           create(:ownership, :unconfirmed, rubygem: @rubygem, user: @new_owner)
-          get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+            get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          end
         end
 
         should redirect_to("rubygem show") { rubygem_path(@rubygem) }
@@ -310,9 +307,6 @@ class OwnersControllerTest < ActionController::TestCase
           assert_equal success_flash, flash[:notice]
         end
         should "resend confirmation email" do
-          ActionMailer::Base.deliveries.clear
-          Delayed::Worker.new.work_off
-
           assert_emails 1
           assert_equal "Please confirm the ownership of #{@rubygem.name} gem on RubyGems.org", last_email.subject
           assert_equal [@new_owner.email], last_email.to
@@ -321,14 +315,14 @@ class OwnersControllerTest < ActionController::TestCase
 
       context "when ownership doesn't exist" do
         setup do
-          get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+            get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          end
         end
 
         should respond_with :not_found
-        should "not resend confirmation email" do
-          ActionMailer::Base.deliveries.clear
-          Delayed::Worker.new.work_off
 
+        should "not resend confirmation email" do
           assert_emails 0
         end
       end
@@ -336,14 +330,14 @@ class OwnersControllerTest < ActionController::TestCase
       context "when confirmed ownership exists" do
         setup do
           create(:ownership, rubygem: @rubygem, user: @new_owner)
-          get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+            get :resend_confirmation, params: { rubygem_id: @rubygem.name }
+          end
         end
 
         should respond_with :not_found
-        should "not resend confirmation email" do
-          ActionMailer::Base.deliveries.clear
-          Delayed::Worker.new.work_off
 
+        should "not resend confirmation email" do
           assert_emails 0
         end
       end
@@ -410,7 +404,9 @@ class OwnersControllerTest < ActionController::TestCase
 
       context "when token has not expired" do
         setup do
-          get :confirm, params: { rubygem_id: @rubygem.name, token: @ownership.token }
+          perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+            get :confirm, params: { rubygem_id: @rubygem.name, token: @ownership.token }
+          end
           @ownership.reload
         end
 
@@ -425,9 +421,6 @@ class OwnersControllerTest < ActionController::TestCase
         end
 
         should "send email notifications about new owner" do
-          ActionMailer::Base.deliveries.clear
-          Delayed::Worker.new.work_off
-
           owner_added_email_subjects = ActionMailer::Base.deliveries.map(&:subject)
 
           assert_contains owner_added_email_subjects, "You were added as an owner to #{@rubygem.name} gem"
@@ -442,7 +435,9 @@ class OwnersControllerTest < ActionController::TestCase
       context "when token has expired" do
         setup do
           travel_to 3.days.from_now
-          get :confirm, params: { rubygem_id: @rubygem.name, token: @ownership.token }
+          perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+            get :confirm, params: { rubygem_id: @rubygem.name, token: @ownership.token }
+          end
         end
 
         should "warn about invalid token" do
@@ -452,9 +447,6 @@ class OwnersControllerTest < ActionController::TestCase
         end
 
         should "not send email notification about owner added" do
-          ActionMailer::Base.deliveries.clear
-          Delayed::Worker.new.work_off
-
           assert_emails 0
         end
       end

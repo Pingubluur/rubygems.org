@@ -2,6 +2,8 @@ require "test_helper"
 require "helpers/email_helpers"
 
 class EmailConfirmationTest < SystemTest
+  include ActiveJob::TestHelper
+
   setup do
     @user = create(:user)
   end
@@ -46,15 +48,19 @@ class EmailConfirmationTest < SystemTest
   end
 
   test "requesting multiple confirmation email" do
-    request_confirmation_mail @user.email
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+      request_confirmation_mail @user.email
+    end
     request_confirmation_mail @user.email
 
-    link = confirmation_link_from(Delayed::Job.first)
+    performed = 0
+    perform_enqueued_jobs only: ->(job) { job.is_a?(ActionMailer::MailDeliveryJob) && (performed += 1) == 1 }
+    link = confirmation_link
     visit link
 
-    Delayed::Worker.new.work_off
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
-    assert_empty Delayed::Job.all
+    assert_no_enqueued_jobs
   end
 
   test "requesting confirmation mail with mfa enabled" do
@@ -94,6 +100,23 @@ class EmailConfirmationTest < SystemTest
     assert page.has_content?("SIGN OUT")
 
     @authenticator.remove!
+  end
+
+  test "requesting confirmation mail with mfa enabled, but mfa session is expired" do
+    @user.enable_mfa!(ROTP::Base32.random_base32, :ui_and_gem_signin)
+    request_confirmation_mail @user.email
+
+    link = last_email_link
+
+    assert_not_nil link
+    visit link
+
+    fill_in "otp", with: ROTP::TOTP.new(@user.mfa_seed).now
+    travel 16.minutes do
+      click_button "Authenticate"
+
+      assert page.has_content? "Your login page session has expired."
+    end
   end
 
   teardown do

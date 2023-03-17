@@ -13,15 +13,7 @@ class Avo::WebHooksSystemTest < ApplicationSystemTestCase
         name: user.login
       }
     )
-    @octokit_stubs.post("/graphql",
-      {
-        query: GitHubOAuthable::INFO_QUERY,
-        variables: { organization_name: "rubygems" }
-      }.to_json) do |_env|
-      [200, { "Content-Type" => "application/json" }, JSON.generate(
-        data: user.info_data
-      )]
-    end
+    stub_github_info_request(user.info_data)
 
     visit avo.root_path
     click_button "Log in with GitHub"

@@ -1,8 +1,12 @@
 class EmailConfirmationsController < ApplicationController
+  include EmailResettable
+  include MfaExpiryMethods
+
   before_action :redirect_to_signin, unless: :signed_in?, only: :unconfirmed
   before_action :redirect_to_new_mfa, if: :mfa_required_not_yet_enabled?, only: :unconfirmed
   before_action :redirect_to_settings_strong_mfa_required, if: :mfa_required_weak_level_enabled?, only: :unconfirmed
   before_action :validate_confirmation_token, only: %i[update mfa_update webauthn_update]
+  after_action :delete_mfa_expiry_session, only: %i[mfa_update webauthn_update]
 
   def new
   end
@@ -13,7 +17,7 @@ class EmailConfirmationsController < ApplicationController
 
     if user
       user.generate_confirmation_token(reset_unconfirmed_email: false)
-      Delayed::Job.enqueue(EmailConfirmationMailer.new(user.id)) if user.save
+      Mailer.email_confirmation(user).deliver_later if user.save
     end
     redirect_to root_path, notice: t(".promise_resend")
   end
@@ -22,6 +26,8 @@ class EmailConfirmationsController < ApplicationController
     if @user.mfa_enabled? || @user.webauthn_credentials.any?
       setup_mfa_authentication
       setup_webauthn_authentication
+
+      create_new_mfa_expiry
 
       render template: "multifactor_auths/mfa_prompt"
     else
@@ -32,6 +38,8 @@ class EmailConfirmationsController < ApplicationController
   def mfa_update
     if mfa_update_conditions_met?
       confirm_email
+    elsif !session_active?
+      login_failure(t("multifactor_auths.session_expired"))
     else
       login_failure(t("multifactor_auths.incorrect_otp"))
     end
@@ -42,6 +50,9 @@ class EmailConfirmationsController < ApplicationController
 
     if params[:credentials].blank?
       login_failure(t("credentials_required"))
+      return
+    elsif !session_active?
+      login_failure(t("multifactor_auths.session_expired"))
       return
     end
 
@@ -67,7 +78,7 @@ class EmailConfirmationsController < ApplicationController
   # used to resend confirmation mail for unconfirmed_email validation
   def unconfirmed
     if current_user.generate_confirmation_token(reset_unconfirmed_email: false) && current_user.save
-      Delayed::Job.enqueue EmailResetMailer.new(current_user.id)
+      email_reset(current_user)
       flash[:notice] = t("profiles.update.confirmation_mail_sent")
     else
       flash[:notice] = t("try_again")
@@ -104,7 +115,7 @@ class EmailConfirmationsController < ApplicationController
   end
 
   def mfa_update_conditions_met?
-    @user.mfa_enabled? && @user.otp_verified?(params[:otp])
+    @user.mfa_enabled? && @user.otp_verified?(params[:otp]) && session_active?
   end
 
   def setup_mfa_authentication

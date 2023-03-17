@@ -13,6 +13,7 @@ gem "dogstatsd-ruby"
 gem "google-protobuf"
 gem "delayed_job"
 gem "delayed_job_active_record"
+gem "faraday", "~> 1.10"
 gem "good_job"
 gem "gravtastic"
 gem "high_voltage"
@@ -32,10 +33,10 @@ gem "rack"
 gem "rack-utf8_sanitizer"
 gem "rbtrace", "~> 0.4.8"
 gem "rdoc"
-gem "rest-client", require: "rest_client"
 gem "roadie-rails"
+gem "ruby-magic"
 gem "shoryuken", "~> 4.0", require: false
-gem "statsd-instrument", "~> 2.3.0"
+gem "statsd-instrument", "~> 3.5"
 gem "validates_formatting_of"
 gem "opensearch-dsl", "~> 0.2.0"
 gem "opensearch-ruby", "~> 1.0.0"
@@ -57,7 +58,8 @@ gem "chartkick"
 gem "groupdate"
 
 # Logging
-gem "lograge"
+gem "amazing_print"
+gem "rails_semantic_logger"
 
 group :assets do
   gem "sassc-rails"
@@ -95,6 +97,7 @@ group :test do
   gem "shoulda"
   gem "selenium-webdriver"
   gem "webdrivers"
+  gem "webmock"
   gem "simplecov", require: false
   gem "simplecov-cobertura", require: false
 end

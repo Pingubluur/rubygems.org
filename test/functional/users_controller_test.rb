@@ -1,6 +1,8 @@
 require "test_helper"
 
 class UsersControllerTest < ActionController::TestCase
+  include ActiveJob::TestHelper
+
   context "on GET to new" do
     setup do
       get :new
@@ -45,7 +47,6 @@ class UsersControllerTest < ActionController::TestCase
     context "confirmation mail" do
       setup do
         post :create, params: { user: { email: "foo@bar.com", password: PasswordHelpers::SECURE_TEST_PASSWORD, handle: "foo" } }
-        Delayed::Worker.new.work_off
       end
 
       should "set email_confirmation_token" do
@@ -55,12 +56,23 @@ class UsersControllerTest < ActionController::TestCase
       end
 
       should "deliver confirmation mail" do
+        perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
+
         refute_empty ActionMailer::Base.deliveries
         email = ActionMailer::Base.deliveries.last
 
         assert_equal ["foo@bar.com"], email.to
         assert_equal ["no-reply@mailer.rubygems.org"], email.from
         assert_equal "Please confirm your email address with RubyGems.org", email.subject
+      end
+
+      should "not deliver confirmation mail when token is removed meanwhile" do
+        user = User.find_by_name("foo")
+        user.update(confirmation_token: nil)
+
+        perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
+
+        assert_empty ActionMailer::Base.deliveries
       end
     end
   end

@@ -1,11 +1,3 @@
-require "net/http"
-
-class Net::HTTP::Purge < Net::HTTPRequest
-  METHOD = "PURGE".freeze
-  REQUEST_HAS_BODY = false
-  RESPONSE_HAS_BODY = true
-end
-
 class Fastly
   concerning :TraceTagging do
     class_methods do
@@ -13,10 +5,14 @@ class Fastly
     end
   end
 
+  include SemanticLogger::Loggable
+
   # These are not kwargs because delayed_job doesn't correctly support kwargs in Fastly.delay.purge
   # See: https://github.com/collectiveidea/delayed_job/issues/1134
   def self.purge(options = {})
     return unless ENV["FASTLY_DOMAINS"].present? && ENV["FASTLY_API_KEY"].present?
+
+    connection = make_connection
 
     ENV["FASTLY_DOMAINS"].split(",").each do |domain|
       url = "https://#{domain}/#{options[:path]}"
@@ -25,12 +21,10 @@ class Fastly
         headers = options[:soft] ? { "Fastly-Soft-Purge" => 1 } : {}
         headers["Fastly-Key"] = ENV["FASTLY_API_KEY"]
 
-        response = RestClient::Request.execute(method: :purge,
-                                              url: url,
-                                              timeout: 10,
-                                              headers: headers)
-        json = JSON.parse(response)
-        Rails.logger.debug { "Fastly purge url=#{url} status=#{json['status']} id=#{json['id']}" }
+        json = connection.get(url, nil, headers) do |req|
+          req.http_method = :purge
+        end
+        logger.debug { { message: "Fastly purge", url:, status: json["status"], id: json["id"] } }
       end
     end
   end
@@ -43,13 +37,18 @@ class Fastly
       headers = { "Fastly-Key" => ENV["FASTLY_API_KEY"] }
       headers["Fastly-Soft-Purge"] = 1 if soft
       url = "https://api.fastly.com/service/#{service_id}/purge/#{key}"
-      response = RestClient::Request.execute(method: :post,
-                                            url: url,
-                                            timeout: 10,
-                                            headers: headers)
-      json = JSON.parse(response)
-      Rails.logger.debug { "Fastly purge url=#{url} status=#{json['status']} id=#{json['id']}" }
+      json = make_connection.post(url, nil, headers)
+      logger.debug { { message: "Fastly purge", url:, status: json["status"], id: json["id"] } }
       json
+    end
+  end
+
+  def self.make_connection
+    Faraday.new(nil, request: { timeout: 10 }) do |f|
+      f.request :json
+      f.response :json
+      f.response :logger, logger, headers: false, errors: true
+      f.response :raise_error
     end
   end
 end

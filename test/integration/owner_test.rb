@@ -1,6 +1,7 @@
 require "test_helper"
 
 class OwnerTest < SystemTest
+  include ActiveJob::TestHelper
   include RubygemsHelper
 
   setup do
@@ -10,14 +11,17 @@ class OwnerTest < SystemTest
     @ownership = create(:ownership, user: @user, rubygem: @rubygem)
 
     sign_in_as(@user)
-    ActionMailer::Base.deliveries.clear
   end
 
   test "adding owner via UI with email" do
     visit_ownerships_page
 
     fill_in "Email / Handle", with: @other_user.email
-    click_button "Add Owner"
+
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+      click_button "Add Owner"
+    end
+
     owners_table = page.find(:css, ".owners__table")
 
     within_element owners_table do
@@ -28,7 +32,7 @@ class OwnerTest < SystemTest
     assert_cell(@other_user, "Added By", @user.handle)
     assert_cell(@other_user, "Confirmed At", "")
 
-    Delayed::Worker.new.work_off
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
     assert_emails 1
     assert_equal "Please confirm the ownership of #{@rubygem.name} gem on RubyGems.org", last_email.subject
@@ -38,12 +42,15 @@ class OwnerTest < SystemTest
     visit_ownerships_page
 
     fill_in "Email / Handle", with: @other_user.handle
-    click_button "Add Owner"
+
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+      click_button "Add Owner"
+    end
 
     assert_cell(@other_user, "Confirmed", "Pending")
     assert_cell(@other_user, "Added By", @user.handle)
 
-    Delayed::Worker.new.work_off
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
     assert_emails 1
     assert_equal "Please confirm the ownership of #{@rubygem.name} gem on RubyGems.org", last_email.subject
@@ -78,13 +85,14 @@ class OwnerTest < SystemTest
     visit_ownerships_page
 
     within_element owner_row(@other_user) do
-      click_button "Remove"
+      perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+        click_button "Remove"
+      end
     end
 
     refute page.has_selector? ".owners__table a[href='#{profile_path(@other_user)}']"
 
-    ActionMailer::Base.deliveries.clear
-    Delayed::Worker.new.work_off
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
     assert_emails 1
     assert_contains last_email.subject, "You were removed as an owner from #{@rubygem.name} gem"
@@ -101,7 +109,7 @@ class OwnerTest < SystemTest
     assert page.has_selector?("a[href='#{profile_path(@user.display_id)}']")
     assert page.has_selector? "#flash_alert", text: "Can't remove the only owner of the gem"
 
-    Delayed::Worker.new.work_off
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob
 
     assert_no_emails
   end
@@ -147,12 +155,13 @@ class OwnerTest < SystemTest
   test "clicking on confirmation link confirms the account" do
     @unconfirmed_ownership = create(:ownership, :unconfirmed, rubygem: @rubygem)
     confirmation_link = confirm_rubygem_owners_url(@rubygem, token: @unconfirmed_ownership.token)
-    visit confirmation_link
+
+    perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+      visit confirmation_link
+    end
 
     assert_equal page.current_path, rubygem_path(@rubygem)
     assert page.has_selector? "#flash_notice", text: "You were added as an owner to #{@rubygem.name} gem"
-
-    Delayed::Worker.new.work_off
 
     assert_emails 2
 

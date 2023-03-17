@@ -1,6 +1,8 @@
 require "test_helper"
 
 class Api::V1::OwnersControllerTest < ActionController::TestCase
+  include ActiveJob::TestHelper
+
   def self.should_respond_to(format)
     should "route GET show with #{format.to_s.upcase}" do
       route = { controller: "api/v1/owners",
@@ -195,8 +197,9 @@ class Api::V1::OwnersControllerTest < ActionController::TestCase
       context "when mfa for UI and API is disabled" do
         context "add user with email" do
           setup do
-            post :create, params: { rubygem_id: @rubygem.to_param, email: @second_user.email }, format: :json
-            Delayed::Worker.new.work_off
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              post :create, params: { rubygem_id: @rubygem.to_param, email: @second_user.email }, format: :json
+            end
           end
 
           should "add second user as unconfrimed owner" do
@@ -587,8 +590,9 @@ class Api::V1::OwnersControllerTest < ActionController::TestCase
       context "when mfa for UI and API is disabled" do
         context "user is not the only confirmed owner" do
           setup do
-            delete :destroy, params: { rubygem_id: @rubygem.to_param, email: @second_user.email, format: :json }
-            Delayed::Worker.new.work_off
+            perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+              delete :destroy, params: { rubygem_id: @rubygem.to_param, email: @second_user.email, format: :json }
+            end
           end
 
           should "remove user as gem owner" do

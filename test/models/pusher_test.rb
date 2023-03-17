@@ -465,6 +465,7 @@ class PusherTest < ActiveSupport::TestCase
       should "create rubygem index" do
         @rubygem.update_column("updated_at", Date.new(2016, 07, 04))
         Delayed::Worker.new.work_off
+        perform_enqueued_jobs only: ReindexRubygemJob
         response = Searchkick.client.get index: "rubygems-#{Rails.env}",
                                          id:    @rubygem.id
         expected_response = {
@@ -511,12 +512,21 @@ class PusherTest < ActiveSupport::TestCase
     end
 
     should "enqueue job for email, updating ES index, spec index and purging cdn" do
-      assert_difference "Delayed::Job.count", 2 do
-        assert_enqueued_jobs 4, only: FastlyPurgeJob do
+      assert_difference "Delayed::Job.count", 1 do
+        assert_enqueued_jobs 5, only: FastlyPurgeJob do
           assert_enqueued_jobs 1, only: Indexer do
-            @cutter.save
+            assert_enqueued_jobs 1, only: ReindexRubygemJob do
+              @cutter.save
+            end
           end
         end
+      end
+    end
+
+    # TODO: Remove this test once this is always enabled
+    should "not enqueue job for storing version contents when ENV disables it" do
+      assert_enqueued_jobs 0, only: StoreVersionContentsJob do
+        @cutter.save
       end
     end
   end
@@ -536,7 +546,7 @@ class PusherTest < ActiveSupport::TestCase
     end
 
     should "update rubygem index" do
-      Delayed::Worker.new.work_off
+      perform_enqueued_jobs only: ReindexRubygemJob
       response = Searchkick.client.get index: "rubygems-#{Rails.env}",
                                        id:    @rubygem.id
 

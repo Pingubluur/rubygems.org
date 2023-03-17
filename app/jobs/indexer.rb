@@ -86,6 +86,6 @@ class Indexer < ApplicationJob
   end
 
   def log(message)
-    Rails.logger.info "[GEMCUTTER:#{Time.zone.now}] #{message}"
+    logger.info message
   end
 end

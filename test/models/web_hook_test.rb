@@ -162,7 +162,7 @@ class WebHookTest < ActiveSupport::TestCase
 
     should "include an Authorization header" do
       authorization = Digest::SHA2.hexdigest(@rubygem.name + @version.number + @hook.user.api_key)
-      RestClient::Request.expects(:execute).with(has_entries(headers: has_entries("Authorization" => authorization)))
+      stub_request(:post, @url).with(headers: { "Authorization" => authorization })
 
       perform_enqueued_jobs only: NotifyWebHookJob do
         @hook.fire("https", "rubygems.org", @version)
@@ -172,7 +172,7 @@ class WebHookTest < ActiveSupport::TestCase
     should "include an Authorization header for a user with no API key" do
       @hook.user.update(api_key: nil)
       authorization = Digest::SHA2.hexdigest(@rubygem.name + @version.number)
-      RestClient::Request.expects(:execute).with(has_entries(headers: has_entries("Authorization" => authorization)))
+      stub_request(:post, @url).with(headers: { "Authorization" => authorization })
 
       perform_enqueued_jobs only: NotifyWebHookJob do
         @hook.fire("https", "rubygems.org", @version)
@@ -183,7 +183,7 @@ class WebHookTest < ActiveSupport::TestCase
       @hook.user.update(api_key: nil)
       create(:api_key, user: @hook.user)
       authorization = Digest::SHA2.hexdigest(@rubygem.name + @version.number + @hook.user.api_keys.first.hashed_key)
-      RestClient::Request.expects(:execute).with(has_entries(headers: has_entries("Authorization" => authorization)))
+      stub_request(:post, @url).with(headers: { "Authorization" => authorization })
 
       perform_enqueued_jobs only: NotifyWebHookJob do
         @hook.fire("https", "rubygems.org", @version)
@@ -191,6 +191,8 @@ class WebHookTest < ActiveSupport::TestCase
     end
 
     should "not increment failure count for hook" do
+      stub_request(:post, @url).to_return(status: 200, body: "", headers: {})
+
       perform_enqueued_jobs only: NotifyWebHookJob do
         @hook.fire("https", "rubygems.org", @version)
       end
@@ -209,15 +211,17 @@ class WebHookTest < ActiveSupport::TestCase
     end
 
     should "increment failure count for hook on errors" do
-      [SocketError,
-       Timeout::Error,
-       Errno::EINVAL,
-       Errno::ECONNRESET,
-       EOFError,
-       Net::HTTPBadResponse,
-       Net::HTTPHeaderSyntaxError,
-       Net::ProtocolError].each_with_index do |exception, index|
-        RestClient.stubs(:post).raises(exception)
+      [
+        SocketError,
+        Timeout::Error,
+        Errno::EINVAL,
+        Errno::ECONNRESET,
+        EOFError,
+        Net::HTTPBadResponse,
+        Net::HTTPHeaderSyntaxError,
+        Net::ProtocolError
+      ].each_with_index do |exception, index|
+        stub_request(:post, @url).to_raise(exception)
 
         perform_enqueued_jobs only: NotifyWebHookJob do
           @hook.fire("https", "rubygems.org", @version)

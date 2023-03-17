@@ -1,6 +1,9 @@
 require "test_helper"
 
 class EmailConfirmationsControllerTest < ActionController::TestCase
+  include ActionMailer::TestHelper
+  include ActiveJob::TestHelper
+
   context "on GET to update" do
     setup { @user = create(:user) }
 
@@ -107,6 +110,7 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
 
       context "when OTP is correct" do
         setup do
+          get :update, params: { token: @user.confirmation_token, user_id: @user.id }
           post :mfa_update, params: { token: @user.confirmation_token, otp: ROTP::TOTP.new(@user.mfa_seed).now }
         end
 
@@ -115,13 +119,14 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
         should "should confirm user account" do
           assert @user.email_confirmed
         end
-        should "sign in user" do
-          assert cookies[:remember_token]
+        should "clear mfa_expires_at" do
+          assert_nil @controller.session[:mfa_expires_at]
         end
       end
 
       context "when OTP is incorrect" do
         setup do
+          get :update, params: { token: @user.confirmation_token, user_id: @user.id }
           post :mfa_update, params: { token: @user.confirmation_token, otp: "incorrect" }
         end
 
@@ -129,6 +134,30 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
 
         should "alert about otp being incorrect" do
           assert_equal "Your OTP code is incorrect.", flash[:alert]
+        end
+      end
+
+      context "when the OTP session is expired" do
+        setup do
+          get :update, params: { token: @user.confirmation_token, user_id: @user.id }
+          travel 16.minutes do
+            post :mfa_update, params: { token: @user.confirmation_token, otp: ROTP::TOTP.new(@user.mfa_seed).now }
+          end
+        end
+
+        should set_flash.now[:alert]
+        should respond_with :unauthorized
+
+        should "clear mfa_expires_at" do
+          assert_nil @controller.session[:mfa_expires_at]
+        end
+
+        should "render sign in page" do
+          assert page.has_content? "Sign in"
+        end
+
+        should "not sign in the user" do
+          refute_predicate @controller.request.env[:clearance], :signed_in?
         end
       end
     end
@@ -171,6 +200,10 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
 
       should "change the user's email" do
         assert @user.reload.email_confirmed
+      end
+
+      should "clear mfa_expires_at" do
+        assert_nil @controller.session[:mfa_expires_at]
       end
     end
 
@@ -222,6 +255,45 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
         assert_not_nil page.find(".js-webauthn-session--form")[:action]
       end
     end
+
+    context "when webauthn session is expired" do
+      setup do
+        @challenge = session[:webauthn_authentication]["challenge"]
+        WebauthnHelpers.create_credential(
+          webauthn_credential: @webauthn_credential,
+          client: @client
+        )
+        travel 16.minutes do
+          post(
+            :webauthn_update,
+            params: {
+              user_id: @user.id,
+              token: @user.confirmation_token,
+              credentials:
+              WebauthnHelpers.get_result(
+                client: @client,
+                challenge: @challenge
+              )
+            }
+          )
+        end
+      end
+
+      should respond_with :unauthorized
+      should set_flash.now[:alert]
+
+      should "clear mfa_expires_at" do
+        assert_nil @controller.session[:mfa_expires_at]
+      end
+
+      should "render sign in page" do
+        assert page.has_content? "Sign in"
+      end
+
+      should "not sign in the user" do
+        refute_predicate @controller.request.env[:clearance], :signed_in?
+      end
+    end
   end
 
   context "on GET to new" do
@@ -240,8 +312,9 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
     context "user exists" do
       setup do
         create(:user, email: "foo@bar.com")
-        post :create, params: { email_confirmation: { email: "foo@bar.com" } }
-        Delayed::Worker.new.work_off
+        perform_enqueued_jobs only: ActionMailer::MailDeliveryJob do
+          post :create, params: { email_confirmation: { email: "foo@bar.com" } }
+        end
       end
 
       should respond_with :redirect
@@ -271,9 +344,9 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
 
     context "user does not exist" do
       should "not deliver confirmation email" do
-        Mailer.expects(:email_confirmation).times(0)
         post :create, params: { email_confirmation: { email: "someone@else.com" } }
-        Delayed::Worker.new.work_off
+
+        assert_no_enqueued_emails
       end
     end
   end
@@ -307,9 +380,9 @@ class EmailConfirmationsControllerTest < ActionController::TestCase
       end
 
       should "send confirmation mail" do
-        Mailer.expects(:email_reset).times(1)
-        post :unconfirmed
-        Delayed::Worker.new.work_off
+        assert_enqueued_email_with Mailer, :email_reset, args: [@user] do
+          post :unconfirmed
+        end
       end
 
       should "set success flash and redirect to edit path" do
